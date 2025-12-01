@@ -1,0 +1,12 @@
+dense-retrieval-mining-thesis/
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── FILE_STRUCTURE.txt
+├── src/
+│   ├── train.py
+│   ├── evaluate.py
+│   └── utils.py
+└── scripts/
+    └── run_pipeline.sh
+

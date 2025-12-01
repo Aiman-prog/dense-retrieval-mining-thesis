@@ -1,0 +1,29 @@
+services:
+  training:
+    image: dense-retrieval-mining-thesis:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dual-encoder-training
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONPATH=/app
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+    stdin_open: true
+    tty: true
+    command: /bin/bash
+
+  # GPU-enabled service (Linux/Windows only)
+  training-gpu:
+    extends:
+      service: training
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    profiles:
+      - gpu
