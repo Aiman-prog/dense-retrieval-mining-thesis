@@ -10,7 +10,7 @@
 #SBATCH --account=Education-EEMCS-MSc-DSAIT
 #SBATCH --output=evaluation_%j.out
 #SBATCH --error=evaluation_%j.err
-#SBATCH --chdir=/home/aimanabdulwaha/newproject/dense-retrieval-mining-thesis
+#SBATCH --chdir=/home/aimanabdulwaha/dense-retrieval-mining-thesis
 
 # --- Load modules ---
 module purge
@@ -23,19 +23,32 @@ module load miniconda3/4.12.0
 eval "$(conda shell.bash hook)"
 conda activate dense-retrieval
 
+# --- Set up scratch space for caches ---
+SCRATCH_CACHE="/scratch/${USER}/caches"
+mkdir -p ${SCRATCH_CACHE}/huggingface
+mkdir -p ${SCRATCH_CACHE}/datasets
+
+# --- Set up PyTerrier dataset symlink (keep PyTerrier in home, only dataset in scratch) ---
+# PyTerrier stays in ~/.pyterrier, but dataset goes to scratch
+mkdir -p ~/.pyterrier/corpora
+if [ ! -e ~/.pyterrier/corpora/msmarco_passage ]; then
+    # Create symlink to dataset in scratch
+    ln -s ${SCRATCH_CACHE}/datasets/msmarco_passage ~/.pyterrier/corpora/msmarco_passage
+elif [ ! -L ~/.pyterrier/corpora/msmarco_passage ]; then
+    # If dataset exists but isn't a symlink, move it to scratch and create symlink
+    mv ~/.pyterrier/corpora/msmarco_passage ${SCRATCH_CACHE}/datasets/msmarco_passage
+    ln -s ${SCRATCH_CACHE}/datasets/msmarco_passage ~/.pyterrier/corpora/msmarco_passage
+fi
+
 # --- Set Hugging Face to offline mode (use cache only) ---
-# Create cache directory if it doesn't exist
-mkdir -p /home/aimanabdulwaha/datasets/huggingface_cache
-export HF_HOME=/home/aimanabdulwaha/datasets/huggingface_cache
-export HF_DATASETS_CACHE=/home/aimanabdulwaha/datasets/huggingface_cache
-export TRANSFORMERS_CACHE=/home/aimanabdulwaha/datasets/huggingface_cache
-export SENTENCE_TRANSFORMERS_HOME=/home/aimanabdulwaha/datasets/huggingface_cache
+# Use scratch space for HuggingFace cache
+export HF_HOME=${SCRATCH_CACHE}/huggingface
+export HF_DATASETS_CACHE=${SCRATCH_CACHE}/huggingface
+export TRANSFORMERS_CACHE=${SCRATCH_CACHE}/huggingface
+export SENTENCE_TRANSFORMERS_HOME=${SCRATCH_CACHE}/huggingface
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
-
-# --- Set PyTerrier cache (if different from default) ---
-# PyTerrier will use ~/.pyterrier by default, ensure it's accessible
 
 # --- Set scratch space for BM25 index ---
 SCRATCH_DIR="/scratch/${USER}/dense-retrieval"
@@ -43,7 +56,7 @@ mkdir -p ${SCRATCH_DIR}
 INDEX_PATH="${SCRATCH_DIR}/bm25_index"
 
 # --- Set PYTHONPATH to project root (use --chdir path) ---
-export PYTHONPATH=/home/aimanabdulwaha/newproject/dense-retrieval-mining-thesis:${PYTHONPATH}
+export PYTHONPATH=/home/aimanabdulwaha/dense-retrieval-mining-thesis:${PYTHONPATH}
 
 # --- Run evaluation ---
 python src/evaluate.py \
