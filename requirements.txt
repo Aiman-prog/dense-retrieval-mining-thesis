@@ -1,6 +1,8 @@
 sentence-transformers==2.2.2
 transformers==4.34.1
-pyterrier
+pyterrier[java]
 datasets
 pandas
 scikit-learn
+numpy
+jupyter

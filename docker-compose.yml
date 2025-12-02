@@ -7,6 +7,8 @@ services:
     container_name: dual-encoder-training
     volumes:
       - .:/app
+    ports:
+      - "8888:8888"  # Jupyter notebook
     environment:
       - PYTHONPATH=/app
       - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
