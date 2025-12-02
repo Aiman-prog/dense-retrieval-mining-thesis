@@ -170,8 +170,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Local: dev.small with sample (max_docs=10000)
-    # Cluster: test-2019 with full corpus (max_docs=None)
-    max_docs = None if args.variant == 'test-2019' else 10000
+    # Cluster: test-2019 - use sample for testing, full corpus for final evaluation
+    # For testing: use 10000 docs. For full eval: change to max_docs=None
+    max_docs = 10000  # Change to None for full corpus evaluation
 
     evaluate(
         model_path=args.model_path,

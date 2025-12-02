@@ -2,7 +2,7 @@
 
 #SBATCH --job-name=dense_eval
 #SBATCH --partition=gpu-a100
-#SBATCH --time=04:00:00
+#SBATCH --time=00:10:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gpus-per-task=1
@@ -17,12 +17,15 @@ module purge
 module load 2025
 module load cuda/12.9
 module load miniconda3/4.12.0
+# Java is installed via conda (openjdk=11), no need to load module
 
 # --- Activate Conda environment ---
 eval "$(conda shell.bash hook)"
-conda activate ai-assistant-env
+conda activate dense-retrieval
 
 # --- Set Hugging Face to offline mode (use cache only) ---
+# Create cache directory if it doesn't exist
+mkdir -p /home/aimanabdulwaha/datasets/huggingface_cache
 export HF_HOME=/home/aimanabdulwaha/datasets/huggingface_cache
 export HF_DATASETS_CACHE=/home/aimanabdulwaha/datasets/huggingface_cache
 export TRANSFORMERS_CACHE=/home/aimanabdulwaha/datasets/huggingface_cache
@@ -38,6 +41,9 @@ export HF_DATASETS_OFFLINE=1
 SCRATCH_DIR="/scratch/${USER}/dense-retrieval"
 mkdir -p ${SCRATCH_DIR}
 INDEX_PATH="${SCRATCH_DIR}/bm25_index"
+
+# --- Set PYTHONPATH to project root (use --chdir path) ---
+export PYTHONPATH=/home/aimanabdulwaha/newproject/dense-retrieval-mining-thesis:${PYTHONPATH}
 
 # --- Run evaluation ---
 python src/evaluate.py \
