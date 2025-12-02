@@ -9,9 +9,16 @@ import pandas as pd
 
 
 def init_pyterrier() -> None:
-    """Initialize PyTerrier (idempotent - safe to call multiple times)."""
+    """Initialize PyTerrier (idempotent - safe to call multiple times).
+    
+    Uses pt.java.init() directly to avoid online version checks.
+    Assumes PyTerrier was pre-initialized on login node (see CLUSTER_SETUP.md Step 2).
+    """
     if not pt.started():
-        pt.init()
+        # Use explicit version to avoid online version check (required for offline mode)
+        # Version 5.11 matches what was downloaded during Step 2 initialization
+        # Helper version 0.0.8 was shown in the error message
+        pt.init(version="5.11", helper_version="0.0.8")
 
 
 def load_dataset(name: str = "msmarco_passage") -> pt.datasets.Dataset:
@@ -84,6 +91,107 @@ def load_qrels(
     if not isinstance(qrels, pd.DataFrame):
         qrels = pd.DataFrame(qrels)
     return qrels
+
+
+def load_corpus_by_docnos(
+    dataset: pt.datasets.Dataset,
+    docnos: set
+) -> Dict[str, str]:
+    """Load corpus documents by their docnos.
+    
+    Args:
+        dataset: PyTerrier dataset.
+        docnos: Set of document IDs to load.
+        
+    Returns:
+        Dictionary mapping docno to text.
+    """
+    corpus_dict = {}
+    corpus_iter = dataset.get_corpus_iter()
+    for doc in corpus_iter:
+        docno = doc['docno']
+        if docno in docnos:
+            corpus_dict[docno] = doc['text']
+            if len(corpus_dict) >= len(docnos):
+                break
+    return corpus_dict
+
+
+def prepare_evaluation_data(
+    dataset: pt.datasets.Dataset,
+    variant: str = 'eval.small'
+) -> tuple:
+    """Prepare evaluation data for InformationRetrievalEvaluator.
+    
+    Args:
+        dataset: PyTerrier dataset.
+        variant: Dataset variant (default: 'eval.small').
+        
+    Returns:
+        Tuple of (queries_dict, corpus_dict, relevant_docs_dict).
+    """
+    eval_topics = load_topics(dataset, variant=variant)
+    eval_qrels = load_qrels(dataset, variant=variant)
+    
+    # Load corpus for evaluation (only documents in eval qrels)
+    eval_docnos = set(eval_qrels['docno'].unique())
+    eval_corpus = load_corpus_by_docnos(dataset, eval_docnos)
+    
+    # Format: {query_id: query_text}
+    queries_dict = dict(zip(eval_topics['qid'], eval_topics['query']))
+    
+    # Build relevance dict: {qid: {docno: score}}
+    relevant_docs = {}
+    for _, row in eval_qrels.iterrows():
+        qid = row['qid']
+        docno = row['docno']
+        score = row['label']
+        if qid not in relevant_docs:
+            relevant_docs[qid] = {}
+        relevant_docs[qid][docno] = float(score)
+    
+    return queries_dict, eval_corpus, relevant_docs
+
+
+def plot_training_loss(
+    loss_history: list,
+    output_path: str
+) -> None:
+    """Plot and save training loss graph.
+    
+    Args:
+        loss_history: List of (step, loss) tuples or list of losses.
+        output_path: Path to save the plot.
+    """
+    import matplotlib.pyplot as plt
+    
+    if not loss_history:
+        print("Note: No loss history to plot.")
+        return
+    
+    try:
+        # Extract steps and losses
+        if isinstance(loss_history[0], (tuple, list)) and len(loss_history[0]) == 2:
+            steps, losses = zip(*loss_history)
+        else:
+            steps = range(len(loss_history))
+            losses = loss_history
+        
+        plt.figure(figsize=(10, 6))
+        plt.plot(steps, losses, 'b-', linewidth=2, label='Training Loss')
+        plt.xlabel('Training Steps', fontsize=12)
+        plt.ylabel('Training Loss', fontsize=12)
+        plt.title('Training Loss Over Time', fontsize=14)
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        print(f"Training loss plot saved to: {output_path}")
+        plt.close()
+    except Exception as e:
+        print(f"Warning: Could not plot training loss: {e}")
 
 
 def save_evaluation_results(

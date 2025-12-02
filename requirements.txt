@@ -4,5 +4,7 @@ pyterrier[java]
 datasets
 pandas
 scikit-learn
-numpy
+numpy<2.0
 jupyter
+faiss-gpu
+matplotlib
