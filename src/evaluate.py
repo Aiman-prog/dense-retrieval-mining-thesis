@@ -1,5 +1,7 @@
 """Evaluation module using PyTerrier's high-level API."""
 
+import argparse
+import os
 from typing import Dict, Any, Optional
 
 import pyterrier as pt
@@ -10,7 +12,8 @@ from src.utils import (
     init_pyterrier,
     load_dataset,
     load_topics,
-    load_qrels
+    load_qrels,
+    save_evaluation_results
 )
 
 def create_bm25_baseline(
@@ -34,12 +37,21 @@ def create_bm25_baseline(
     return pt.terrier.Retriever(indexref, wmodel="BM25") % top_k
 
 
-def evaluate(model_path: str, variant: str = 'dev.small', max_docs: Optional[int] = None) -> Dict[str, Any]:
+def evaluate(
+    model_path: str,
+    variant: str = 'dev.small',
+    max_docs: Optional[int] = None,
+    index_path: str = "./bm25_index",
+    output_file: Optional[str] = None
+) -> Dict[str, Any]:
     """Evaluate a dense retrieval model against BM25 baseline.
 
     Args:
         model_path: Path to SentenceTransformer model (or HuggingFace ID).
         variant: Dataset variant to use (default: 'dev.small' for quick testing).
+        max_docs: Maximum number of documents to index (None for full corpus).
+        index_path: Path to store BM25 index (use scratch space on cluster).
+        output_file: Optional path to save results as JSON.
 
     Returns:
         Dictionary containing experiment results with metrics.
@@ -71,17 +83,19 @@ def evaluate(model_path: str, variant: str = 'dev.small', max_docs: Optional[int
         lambda queries_df: dense_engine.search(queries_df, top_k=10)
     )
     
-    print("\nBuilding BM25 baseline index...")
+    print(f"\nBuilding BM25 baseline index at {index_path}...")
+    # Ensure index directory exists
+    os.makedirs(os.path.dirname(index_path) if os.path.dirname(index_path) else '.', exist_ok=True)
     # Use same corpus sample for BM25 if max_docs is set
     if max_docs is not None:
         from src.utils import load_corpus_sample
         corpus_df = load_corpus_sample(dataset, max_docs=max_docs)
         corpus_iter = (row.to_dict() for _, row in corpus_df.iterrows())
-        indexer = pt.IterDictIndexer("./bm25_index", overwrite=True, fields=['text'])
+        indexer = pt.IterDictIndexer(index_path, overwrite=True, fields=['text'])
         indexref = indexer.index(corpus_iter)
         bm25_pipeline = pt.terrier.Retriever(indexref, wmodel="BM25") % 10
     else:
-        bm25_pipeline = create_bm25_baseline(dataset, top_k=10)
+        bm25_pipeline = create_bm25_baseline(dataset, index_path=index_path, top_k=10)
 
     # Run experiment
     print("\nRunning experiment: Dense vs BM25...")
@@ -110,12 +124,60 @@ def evaluate(model_path: str, variant: str = 'dev.small', max_docs: Optional[int
     print(f"BM25  - nDCG@10: {results['bm25_ndcg']:.4f}, MRR@10: {results['bm25_mrr']:.4f}")
     print("="*60)
 
+    # Save results to file if specified
+    if output_file:
+        save_evaluation_results(
+            results=results,
+            output_file=output_file,
+            model_path=model_path,
+            variant=variant,
+            num_queries=len(topics),
+            num_qrels=len(qrels)
+        )
+        print(f"\nResults saved to: {output_file}")
+
     return results
 
 
 if __name__ == "__main__":
-    """Run evaluation with naive (untuned) model."""
-    model_path = 'sentence-transformers/all-MiniLM-L6-v2'
-    # Use max_docs=10000 for quick testing, None for full corpus
-    evaluate(model_path, variant='dev.small', max_docs=10000)
+    """Run evaluation with command-line arguments."""
+    parser = argparse.ArgumentParser(description='Evaluate dense retrieval model against BM25 baseline')
+    parser.add_argument(
+        '--model-path',
+        type=str,
+        default='sentence-transformers/all-MiniLM-L6-v2',
+        help='Path to SentenceTransformer model or HuggingFace ID'
+    )
+    parser.add_argument(
+        '--variant',
+        type=str,
+        default='dev.small',
+        help='Dataset variant (default: dev.small for local testing, use test-2019 for cluster)'
+    )
+    parser.add_argument(
+        '--index-path',
+        type=str,
+        default='./bm25_index',
+        help='Path to store BM25 index (default: ./bm25_index, use scratch space on cluster)'
+    )
+    parser.add_argument(
+        '--output-file',
+        type=str,
+        default=None,
+        help='Path to save results as JSON (optional)'
+    )
+
+    args = parser.parse_args()
+
+    # Local: dev.small with sample (max_docs=10000)
+    # Cluster: test-2019 with full corpus (max_docs=None)
+    max_docs = None if args.variant == 'test-2019' else 10000
+
+    evaluate(
+        model_path=args.model_path,
+        variant=args.variant,
+        max_docs=max_docs,
+        index_path=args.index_path,
+        output_file=args.output_file
+    )
 

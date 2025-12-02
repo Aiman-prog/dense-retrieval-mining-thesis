@@ -1,6 +1,8 @@
 """Utility functions for dataset loading and indexing."""
 
-from typing import Optional
+import json
+import os
+from typing import Optional, Dict, Any
 
 import pyterrier as pt
 import pandas as pd
@@ -82,6 +84,39 @@ def load_qrels(
     if not isinstance(qrels, pd.DataFrame):
         qrels = pd.DataFrame(qrels)
     return qrels
+
+
+def save_evaluation_results(
+    results: Dict[str, Any],
+    output_file: str,
+    model_path: str,
+    variant: str,
+    num_queries: int,
+    num_qrels: int
+) -> None:
+    """Save evaluation results to a JSON file.
+
+    Args:
+        results: Dictionary containing evaluation metrics (dense_ndcg, dense_mrr, etc.).
+        output_file: Path to save the JSON file.
+        model_path: Path or identifier of the model used.
+        variant: Dataset variant used for evaluation.
+        num_queries: Number of queries evaluated.
+        num_qrels: Number of relevance judgments.
+    """
+    results_to_save = {
+        'model_path': model_path,
+        'variant': variant,
+        'dense_ndcg': float(results['dense_ndcg']),
+        'dense_mrr': float(results['dense_mrr']),
+        'bm25_ndcg': float(results['bm25_ndcg']),
+        'bm25_mrr': float(results['bm25_mrr']),
+        'num_queries': num_queries,
+        'num_qrels': num_qrels
+    }
+    os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else '.', exist_ok=True)
+    with open(output_file, 'w') as f:
+        json.dump(results_to_save, f, indent=2)
 
 
 
