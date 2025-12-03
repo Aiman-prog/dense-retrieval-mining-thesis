@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dense-retrieval-mining-thesis"
+version = "0.1.0"
+description = "Dense retrieval mining thesis project"
+requires-python = ">=3.8"
+dependencies = [
+    "sentence-transformers>=2.5.0",
+    "transformers>=4.40.0",
+    "accelerate>=0.20.1",
+    "huggingface-hub<1.0.0,>=0.16.4",
+    "pyterrier[java]",
+    "datasets",
+    "pandas",
+    "scikit-learn",
+    "numpy<2.0",
+    "jupyter",
+    "faiss-cpu",
+    "matplotlib",
+]
+
+[tool.setuptools]
+packages = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "."
+
+[tool.pyright]
+include = ["src"]
+extraPaths = ["."]
+
+[tool.pylint]
+init-hook = "import sys; sys.path.insert(0, '.')"
+

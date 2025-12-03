@@ -2,7 +2,7 @@
 
 #SBATCH --job-name=dense_eval
 #SBATCH --partition=gpu-a100
-#SBATCH --time=00:10:00
+#SBATCH --time=03:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gpus-per-task=1
@@ -50,18 +50,28 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 
-# --- Set scratch space for BM25 index ---
+# --- Set scratch space for BM25 index and dense index ---
 SCRATCH_DIR="/scratch/${USER}/dense-retrieval"
 mkdir -p ${SCRATCH_DIR}
 INDEX_PATH="${SCRATCH_DIR}/bm25_index"
+DENSE_INDEX_PATH="${SCRATCH_DIR}/dense_index"  # FAISS creates .faiss and .meta files
+
+# Export SCRATCH_DIR for auto-detection in evaluate.py
+export SCRATCH_DIR=${SCRATCH_DIR}
 
 # --- Set PYTHONPATH to project root (use --chdir path) ---
 export PYTHONPATH=/home/aimanabdulwaha/dense-retrieval-mining-thesis:${PYTHONPATH}
 
 # --- Run evaluation ---
+# Debug: show what paths are being used
+echo "DEBUG: INDEX_PATH=${INDEX_PATH}"
+echo "DEBUG: DENSE_INDEX_PATH=${DENSE_INDEX_PATH}"
+echo "DEBUG: SCRATCH_DIR=${SCRATCH_DIR}"
+
 python src/evaluate.py \
   --model-path sentence-transformers/all-MiniLM-L6-v2 \
   --variant test-2019 \
-  --index-path ${INDEX_PATH} \
+  --index-path "${INDEX_PATH}" \
+  --dense-index-path "${DENSE_INDEX_PATH}" \
   --output-file evaluation_results.json
 

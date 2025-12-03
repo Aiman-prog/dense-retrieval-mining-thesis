@@ -1,0 +1,10 @@
+{
+  "model_path": "sentence-transformers/all-MiniLM-L6-v2",
+  "variant": "dev.small",
+  "dense_ndcg": 0.0002464450058120165,
+  "dense_mrr": 0.00019238641015145312,
+  "bm25_ndcg": 0.00020496798826266378,
+  "bm25_mrr": 0.00017908309455587392,
+  "num_queries": 6980,
+  "num_qrels": 7437
+}

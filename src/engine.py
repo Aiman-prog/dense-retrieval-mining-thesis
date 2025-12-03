@@ -1,188 +1,159 @@
 """Core Search Engine module for Dense Retrieval."""
 
 from typing import Any, Optional
-
-import pyterrier as pt
-from sentence_transformers import SentenceTransformer
+import os
 import numpy as np
 import pandas as pd
+import faiss
+from sentence_transformers import SentenceTransformer
+
+from src.utils import get_device
 
 
 class DenseEngine:
     """Dense retrieval engine using SentenceTransformer models.
-
-    This class can work with both naive (pre-trained) and fine-tuned models.
-    It handles document indexing and query retrieval using dense embeddings.
-
-    Attributes:
-        model: SentenceTransformer model instance.
-        model_name: Name or path of the loaded model.
-        _index: Dictionary containing 'docno', 'text', and 'embeddings' arrays.
+    
+    Uses FAISS for efficient similarity search with cosine similarity
+    (via inner product on L2-normalized embeddings).
     """
 
     def __init__(self, model_name_or_path: str) -> None:
-        """Initialize the DenseEngine with a model.
-
+        """Initialize the dense retrieval engine.
+        
         Args:
-            model_name_or_path: HuggingFace model identifier or local path.
-                Examples: 'sentence-transformers/all-MiniLM-L6-v2',
-                          'distilbert-base-uncased', or './models/my-model'
-
-        Raises:
-            ValueError: If model loading fails.
+            model_name_or_path: Path to SentenceTransformer model or HuggingFace model ID.
         """
-        try:
-            self.model = SentenceTransformer(model_name_or_path)
-            self.model_name = model_name_or_path
-            self._index: Optional[dict] = None
-        except Exception as e:
-            raise ValueError(f"Failed to load model '{model_name_or_path}': {e}") from e
+        self.model = SentenceTransformer(model_name_or_path)
+        self.device = get_device()
+        self.model = self.model.to(self.device)
+        self.faiss_index: Optional[faiss.Index] = None
+        self.docno_map: Optional[np.ndarray] = None
+        self.text_map: Optional[np.ndarray] = None
 
-    def index(self, dataset: Any) -> None:
+    def index(self, dataset: Any, index_path: Optional[str] = None) -> None:
         """Index documents using dense embeddings.
-
-        Encodes documents using the SentenceTransformer model and stores
-        embeddings for efficient retrieval.
-
+        
         Args:
-            dataset: PyTerrier dataset or pandas DataFrame with documents.
-                Must have 'docno' and 'text' columns.
-
-        Raises:
-            ValueError: If dataset format is invalid.
+            dataset: Dataset with 'docno' and 'text' columns, or PyTerrier dataset.
+            index_path: Optional path to save/load FAISS index. If provided and exists, 
+                       index will be loaded instead of rebuilt.
         """
+        # Try to load existing index
+        if index_path and os.path.exists(f"{index_path}.faiss") and os.path.exists(f"{index_path}.meta.npz"):
+            print(f"Loading existing index from {index_path}...")
+            self.faiss_index = faiss.read_index(f"{index_path}.faiss")
+            meta = np.load(f"{index_path}.meta.npz", allow_pickle=True)
+            self.docno_map, self.text_map = meta['docno'], meta['text']
+            print(f"Index loaded ({len(self.docno_map)} documents)")
+            return
+        
+        # Load documents
         from src.utils import init_pyterrier
         init_pyterrier()
         
-        # Convert dataset to DataFrame if needed
         if hasattr(dataset, 'get_corpus_iter'):
-            # Directly convert iterable to DataFrame (more efficient than manual loop)
-            corpus_iter = dataset.get_corpus_iter()
-            docs_df = pd.DataFrame(list(corpus_iter))
-        elif isinstance(dataset, pd.DataFrame):
-            docs_df = dataset
+            docs_df = pd.DataFrame(list(dataset.get_corpus_iter()))
         else:
-            raise ValueError("Dataset must be a PyTerrier dataset or pandas DataFrame")
-
-        # Validate required columns
+            docs_df = dataset.copy()
+        
         if 'docno' not in docs_df.columns or 'text' not in docs_df.columns:
             raise ValueError("Dataset must have 'docno' and 'text' columns")
 
-        # Encode documents
-        print(f"Encoding {len(docs_df)} documents...")
-        doc_texts = docs_df['text'].tolist()
+        # Encode documents to embeddings
         doc_embeddings = self.model.encode(
-            doc_texts,
+            docs_df['text'].tolist(),
             show_progress_bar=True,
             batch_size=32,
-            convert_to_numpy=True
+            convert_to_numpy=True,
+            device=self.device
         )
 
-        # Store index data (embeddings as numpy array for efficiency)
-        self._index = {
-            'docno': docs_df['docno'].values,
-            'text': docs_df['text'].values,
-            'embeddings': doc_embeddings  # Keep as numpy array
-        }
+        # Create FAISS index for cosine similarity (inner product on normalized vectors)
+        # IndexFlatIP = Inner Product (for cosine similarity with normalized vectors)
+        embedding_dim = doc_embeddings.shape[1]
+        self.faiss_index = faiss.IndexFlatIP(embedding_dim)
+        
+        # Normalize embeddings for cosine similarity
+        doc_embeddings = doc_embeddings.astype('float32')
+        faiss.normalize_L2(doc_embeddings)
+        
+        # Add embeddings to index
+        self.faiss_index.add(doc_embeddings)
+        
+        # Store document metadata
+        self.docno_map = docs_df['docno'].values
+        self.text_map = docs_df['text'].values
 
-        print(f"Index built successfully with {len(docs_df)} documents")
+        # Save index if path provided
+        if index_path:
+            os.makedirs(os.path.dirname(index_path) if os.path.dirname(index_path) else '.', exist_ok=True)
+            faiss.write_index(self.faiss_index, f"{index_path}.faiss")
+            np.savez_compressed(f"{index_path}.meta", docno=self.docno_map, text=self.text_map)
+            print(f"Index saved to {index_path}.faiss and {index_path}.meta.npz")
 
     def search(self, queries: Any, top_k: int = 10) -> pd.DataFrame:
         """Perform dense retrieval for given queries.
-
+        
         Args:
-            queries: PyTerrier dataset, pandas DataFrame, or list of query strings.
-                If DataFrame, must have 'qid' and 'query' columns.
+            queries: List of query strings, DataFrame with 'query' column, or PyTerrier topics.
             top_k: Number of top documents to retrieve per query.
-
+            
         Returns:
-            DataFrame with columns: ['qid', 'docno', 'score', 'rank'].
-
-        Raises:
-            RuntimeError: If index has not been built yet.
+            DataFrame with columns: 'qid', 'docno', 'score', 'rank'.
         """
-        if self._index is None:
+        if self.faiss_index is None:
             raise RuntimeError("Index not built. Call index() first.")
 
-        # Convert queries to DataFrame format
+        # Normalize query input format
         if isinstance(queries, list):
-            queries_df = pd.DataFrame({
-                'qid': range(len(queries)),
-                'query': queries
-            })
+            queries_df = pd.DataFrame({'qid': range(len(queries)), 'query': queries})
         elif hasattr(queries, 'get_topics'):
             queries_df = queries.get_topics()
-        elif isinstance(queries, pd.DataFrame):
-            queries_df = queries.copy()
         else:
-            raise ValueError("Queries must be a list, PyTerrier dataset, or DataFrame")
-
-        # Validate query format
+            queries_df = queries.copy()
+        
         if 'query' not in queries_df.columns:
             raise ValueError("Queries must have 'query' column")
-
-        # Ensure qid column exists
         if 'qid' not in queries_df.columns:
             queries_df['qid'] = queries_df.index
 
-        # Encode queries
-        query_texts = queries_df['query'].tolist()
+        # Encode queries to embeddings
         query_embeddings = self.model.encode(
-            query_texts,
+            queries_df['query'].tolist(),
             show_progress_bar=True,
             batch_size=32,
-            convert_to_numpy=True
+            convert_to_numpy=True,
+            device=self.device
         )
 
-        # Get document embeddings and docnos from index
-        doc_embeddings = self._index['embeddings']
-        docnos = self._index['docno']
+        # Normalize query embeddings for cosine similarity
+        query_embeddings = query_embeddings.astype('float32')
+        faiss.normalize_L2(query_embeddings)
+        
+        # Search in FAISS index
+        scores, indices = self.faiss_index.search(query_embeddings, top_k)
 
-        # Normalize document embeddings for cosine similarity
-        doc_norms = np.linalg.norm(doc_embeddings, axis=1, keepdims=True)
-        doc_embeddings_norm = doc_embeddings / (doc_norms + 1e-8)
-
-        # Normalize query embeddings
-        query_norms = np.linalg.norm(query_embeddings, axis=1, keepdims=True)
-        query_embeddings_norm = query_embeddings / (query_norms + 1e-8)
-
-        # Vectorized cosine similarity: (n_queries, n_docs)
-        similarity_matrix = np.dot(query_embeddings_norm, doc_embeddings_norm.T)
-
-        # Get top-k for each query
+        # Format results
         results = []
         for i, qid in enumerate(queries_df['qid']):
-            scores = similarity_matrix[i]
-            top_indices = np.argsort(scores)[::-1][:top_k]
-            for rank, doc_idx in enumerate(top_indices, start=1):
-                results.append({
-                    'qid': qid,
-                    'docno': docnos[doc_idx],
-                    'score': float(scores[doc_idx]),
-                    'rank': rank
-                })
-
+            for rank, (doc_idx, score) in enumerate(zip(indices[i], scores[i]), start=1):
+                if doc_idx >= 0:  # Valid result (FAISS returns -1 for invalid results)
+                    results.append({
+                        'qid': qid,
+                        'docno': self.docno_map[doc_idx],
+                        'score': float(score),
+                        'rank': rank
+                    })
         return pd.DataFrame(results)
 
-
 if __name__ == "__main__":
-    """Test DenseEngine with user query."""
     from src.utils import load_dataset, load_corpus_sample
-    
-    # Load dataset sample and create indexed engine
     dataset = load_dataset()
-    corpus_df = load_corpus_sample(dataset, max_docs=1000)
     engine = DenseEngine('sentence-transformers/all-MiniLM-L6-v2')
-    engine.index(corpus_df)
-    
-    # Get query from user
+    engine.index(load_corpus_sample(dataset, max_docs=1000))
     query = input("\nEnter your query: ")
     results = engine.search([query], top_k=5)
-    
-    # Display results
     print(f"\nTop 5 results for '{query}':\n")
-    for idx, row in results.iterrows():
-        doc_idx = np.where(engine._index['docno'] == row['docno'])[0][0]
-        doc_text = engine._index['text'][doc_idx]
-        print(f"[{row['rank']}] (score: {row['score']:.4f})")
-        print(f"{doc_text[:150]}...\n")
+    for _, row in results.iterrows():
+        doc_idx = np.where(engine.docno_map == row['docno'])[0][0]
+        print(f"[{row['rank']}] (score: {row['score']:.4f}) {engine.text_map[doc_idx][:150]}...")

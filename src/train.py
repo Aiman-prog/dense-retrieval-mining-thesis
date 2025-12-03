@@ -1,11 +1,13 @@
 """Training script for fine-tuning dual encoder on MS MARCO."""
 
 import argparse
-import random
 import os
-from sentence_transformers import SentenceTransformer, InputExample, losses
+
+from sentence_transformers import SentenceTransformer, losses, SentenceTransformerTrainer
 from sentence_transformers.evaluation import InformationRetrievalEvaluator
-import torch
+from sentence_transformers.training_args import SentenceTransformerTrainingArguments
+from datasets import Dataset
+from transformers import TrainerCallback
 
 from src.utils import (
     init_pyterrier,
@@ -13,16 +15,42 @@ from src.utils import (
     load_topics,
     load_qrels,
     load_corpus_by_docnos,
+    build_query_positives_mapping,
     prepare_evaluation_data,
-    plot_training_loss
+    plot_training_loss,
+    get_and_print_device
 )
+from src.mine_negatives import mine_negatives
+
+
+class LossTrackingCallback(TrainerCallback):
+    """Callback to track training loss during sentence-transformers training."""
+    def __init__(self):
+        self.losses = []
+        self.steps = []
+    
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        """Called when logs are created."""
+        if logs is not None and 'loss' in logs:
+            loss_value = logs['loss']
+            self.losses.append(float(loss_value))
+            self.steps.append(state.global_step)
+            # Print progress every 100 steps
+            if state.global_step % 100 == 0:
+                print(f"  Step {state.global_step}: Loss = {loss_value:.4f}")
+    
+    def on_epoch_end(self, args, state, control, **kwargs):
+        """Called after each epoch."""
+        if self.losses:
+            avg_loss = sum(self.losses[-100:]) / min(100, len(self.losses))
+            print(f"  Epoch {state.epoch} complete. Recent avg loss: {avg_loss:.4f}")
 
 
 def train(
     strategy: str = 'in-batch',
-    model_name: str = 'distilbert-base-uncased',
+    model_name: str = 'sentence-transformers/all-MiniLM-L6-v2',
     output_dir: str = './output',
-    num_examples: int = 100000,
+    num_examples: int = 1000,
     batch_size: int = 32,
     epochs: int = 1
 ) -> None:
@@ -53,73 +81,42 @@ def train(
     print(f"Loaded {len(corpus_dict)} documents from corpus")
     
     # Create query -> positive passages mapping
-    # Filter qrels to only label=1 (relevant)
-    positive_qrels = qrels[qrels['label'] == 1]
-    query_positives = {}
-    for _, row in positive_qrels.iterrows():
-        qid = row['qid']
-        docno = row['docno']
-        if qid not in query_positives:
-            query_positives[qid] = []
-        if docno in corpus_dict:
-            query_positives[qid].append(corpus_dict[docno])
+    query_positives = build_query_positives_mapping(qrels, corpus_dict)
     
     # Initialize model first (needed for loss functions)
-    model = SentenceTransformer(model_name)
-    if torch.cuda.is_available():
-        model = model.to('cuda')
-        print(f"✓ Using GPU: {torch.cuda.get_device_name(0)}")
+    # Use cache folder from environment (scratch space on cluster)
+    # Offline mode is controlled via environment variables (HF_HUB_OFFLINE, TRANSFORMERS_OFFLINE)
+    # Set these in your shell script or environment before running
+    cache_folder = os.environ.get('SENTENCE_TRANSFORMERS_HOME') or os.environ.get('HF_HOME')
     
-    # Prepare training examples
-    train_examples = []
-    
-    if strategy == 'in-batch':
-        print(f"Preparing {num_examples} (query, positive) pairs for in-batch negative sampling...")
-        for i, (_, topic_row) in enumerate(topics.iterrows()):
-            if len(train_examples) >= num_examples:
-                break
-            qid = topic_row['qid']
-            if qid not in query_positives or len(query_positives[qid]) == 0:
-                continue
-            
-            query = topic_row['query']
-            # Use first positive passage for this query
-            positive = query_positives[qid][0]
-            train_examples.append(InputExample(texts=[query, positive]))
-        
-        loss = losses.MultipleNegativesRankingLoss(model)
-        
-    elif strategy == 'random':
-        print(f"Preparing {num_examples} (query, positive, negative) triplets...")
-        # Build list of all passages for random negative sampling
-        all_passages = list(corpus_dict.values())
-        
-        for i, (_, topic_row) in enumerate(topics.iterrows()):
-            if len(train_examples) >= num_examples:
-                break
-            qid = topic_row['qid']
-            if qid not in query_positives or len(query_positives[qid]) == 0:
-                continue
-            
-            query = topic_row['query']
-            positive = query_positives[qid][0]
-            # Sample random negative (ensure it's different from positive)
-            negative = random.choice(all_passages)
-            while negative == positive and len(all_passages) > 1:
-                negative = random.choice(all_passages)
-            
-            train_examples.append(InputExample(texts=[query, positive, negative]))
-        
-        loss = losses.TripletLoss(model)
-        
+    if cache_folder:
+        print(f"Loading model from cache: {cache_folder}")
+        model = SentenceTransformer(model_name, cache_folder=cache_folder)
     else:
-        raise ValueError(f"Unknown strategy: {strategy}. Must be 'in-batch' or 'random'")
+        model = SentenceTransformer(model_name)
+    
+    # Use device utility to support CUDA, MPS, or CPU
+    device = get_and_print_device()
+    model = model.to(device)
+    
+    # Mine training examples using the specified negative sampling strategy
+    train_examples = mine_negatives(
+        strategy=strategy,
+        topics=topics,
+        query_positives=query_positives,
+        corpus_dict=corpus_dict if strategy == 'random' else None,
+        num_examples=num_examples
+    )
+    
+    # Use MultipleNegativesRankingLoss (contrastive loss) for both strategies
+    # This implements the InfoNCE contrastive learning objective
+    loss = losses.MultipleNegativesRankingLoss(model)
     
     print(f"Prepared {len(train_examples)} training examples")
     
-    # Prepare evaluation data (eval.small)
-    print(f"\nPreparing evaluation data (eval.small)...")
-    queries_dict, eval_corpus, relevant_docs = prepare_evaluation_data(dataset, variant='eval.small')
+    # Prepare evaluation data (dev.small - has both topics and qrels)
+    print(f"\nPreparing evaluation data (dev.small)...")
+    queries_dict, eval_corpus, relevant_docs = prepare_evaluation_data(dataset, variant='dev.small')
     
     # Create evaluator
     evaluator = InformationRetrievalEvaluator(
@@ -135,27 +132,66 @@ def train(
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
-    # Train model with evaluation
-    training_history = model.fit(
-        train_objectives=[(train_examples, loss)],
-        epochs=epochs,
-        batch_size=batch_size,
-        show_progress_bar=True,
-        evaluator=evaluator,
-        evaluation_steps=5000,  # Evaluate every 5000 steps
-        output_path=output_dir
+    # Convert InputExamples to Dataset format for SentenceTransformerTrainer
+    # InputExamples need to be converted to dict format
+    if strategy == 'in-batch':
+        # For pairs: (text1, text2)
+        train_data = {
+            'text1': [ex.texts[0] for ex in train_examples],
+            'text2': [ex.texts[1] for ex in train_examples]
+        }
+    else:  # random strategy
+        # For triplets: (anchor, positive, negative)
+        train_data = {
+            'anchor': [ex.texts[0] for ex in train_examples],
+            'positive': [ex.texts[1] for ex in train_examples],
+            'negative': [ex.texts[2] for ex in train_examples]
+        }
+    
+    train_dataset = Dataset.from_dict(train_data)
+    
+    # Create callback to track training loss
+    loss_callback = LossTrackingCallback()
+    
+    # Create training arguments
+    # Set logging_steps to a small value to capture loss during training
+    # With small datasets, we want to log more frequently
+    logging_steps = max(1, min(10, len(train_examples) // (batch_size * 4)))
+    training_args = SentenceTransformerTrainingArguments(
+        output_dir=output_dir,
+        num_train_epochs=epochs,
+        per_device_train_batch_size=batch_size,
+        logging_steps=logging_steps,
+        save_strategy="epoch",
+        eval_strategy="epoch" if evaluator else "no",
     )
     
-    # Plot training loss if available
-    loss_history = []
-    if training_history and isinstance(training_history, dict) and 'loss' in training_history:
-        loss_data = training_history['loss']
-        if isinstance(loss_data, list):
-            loss_history = loss_data
+    trainer = SentenceTransformerTrainer(
+        model=model,
+        train_dataset=train_dataset,
+        loss=loss,
+        evaluator=evaluator,
+        args=training_args,
+        callbacks=[loss_callback] 
+    )
     
-    if loss_history:
-        plot_path = os.path.join(output_dir, 'training_loss.png')
-        plot_training_loss(loss_history, plot_path)
+    # Train the model
+    trainer.train()
+    
+    # Save the model
+    model.save(output_dir)
+    
+    # Plot training loss from callback
+    print(f"\nCaptured {len(loss_callback.losses)} loss values from training")
+    # Create list of (step, loss) tuples for plotting
+    if loss_callback.steps:
+        loss_data = list(zip(loss_callback.steps, loss_callback.losses))
+    else:
+        # Use indices as steps if steps weren't tracked
+        loss_data = list(enumerate(loss_callback.losses))
+    
+    plot_path = os.path.join(output_dir, 'training_loss.png')
+    plot_training_loss(loss_data, plot_path)
     
     print(f"Model saved to {output_dir}")
 
@@ -172,7 +208,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '--model-name',
         type=str,
-        default='distilbert-base-uncased',
+        default='sentence-transformers/all-MiniLM-L6-v2',
         help='Base model to fine-tune'
     )
     parser.add_argument(
@@ -184,7 +220,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '--num-examples',
         type=int,
-        default=100000,
+        default=1000,
         help='Number of training examples to use'
     )
     parser.add_argument(

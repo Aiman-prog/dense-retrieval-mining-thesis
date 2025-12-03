@@ -42,6 +42,7 @@ def evaluate(
     variant: str = 'dev.small',
     max_docs: Optional[int] = None,
     index_path: str = "./bm25_index",
+    dense_index_path: Optional[str] = None,
     output_file: Optional[str] = None
 ) -> Dict[str, Any]:
     """Evaluate a dense retrieval model against BM25 baseline.
@@ -51,6 +52,8 @@ def evaluate(
         variant: Dataset variant to use (default: 'dev.small' for quick testing).
         max_docs: Maximum number of documents to index (None for full corpus).
         index_path: Path to store BM25 index (use scratch space on cluster).
+        dense_index_path: Optional path to save/load dense index. If provided and exists,
+                        index will be loaded instead of re-indexing.
         output_file: Optional path to save results as JSON.
 
     Returns:
@@ -66,16 +69,29 @@ def evaluate(
 
     # Create and index DenseEngine
     print(f"\nInitializing DenseEngine with model: {model_path}")
+    
+    # Use provided path, or fallback to scratch if not provided
+    # Note: Directory should already exist from CLUSTER_SETUP.md or run_evaluation.sh
+    # Handle case where argparse receives string 'None' instead of Python None
+    if not dense_index_path or dense_index_path.lower() == 'none':
+        scratch_dir = os.environ.get('SCRATCH_DIR')
+        if scratch_dir:
+            dense_index_path = f"{scratch_dir}/dense_index"  # FAISS creates .faiss and .meta files
+        else:
+            dense_index_path = "./dense_index"  # Local fallback
+    
+    print(f"Dense index path: {dense_index_path}")
     dense_engine = DenseEngine(model_path)
     
+    # Index (will load from disk if exists, otherwise index and save)
     if max_docs is not None:
-        print(f"Indexing corpus sample ({max_docs} documents)...")
+        print(f"Indexing corpus sample ({max_docs} documents) for DenseEngine...")
         from src.utils import load_corpus_sample
         corpus_df = load_corpus_sample(dataset, max_docs=max_docs)
-        dense_engine.index(corpus_df)
+        dense_engine.index(corpus_df, index_path=dense_index_path)
     else:
-        print("Indexing full corpus (this may take a while)...")
-        dense_engine.index(dataset)
+        print("Indexing full corpus (this may take a while) for DenseEngine...")
+        dense_engine.index(dataset, index_path=dense_index_path)
 
     # Create dense retrieval pipeline using pt.apply.by_query
     # This processes queries one at a time and retrieves documents (Q → Q×D)
@@ -161,6 +177,12 @@ if __name__ == "__main__":
         help='Path to store BM25 index (default: ./bm25_index, use scratch space on cluster)'
     )
     parser.add_argument(
+        '--dense-index-path',
+        type=str,
+        default=None,
+        help='Path to save/load dense index (default: auto-detect scratch space, or ./dense_index)'
+    )
+    parser.add_argument(
         '--output-file',
         type=str,
         default=None,
@@ -168,17 +190,20 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+    
+    # Debug: show what arguments were parsed
+    print(f"DEBUG: dense_index_path argument: '{args.dense_index_path}'")
 
-    # Local: dev.small with sample (max_docs=10000)
-    # Cluster: test-2019 - use sample for testing, full corpus for final evaluation
-    # For testing: use 10000 docs. For full eval: change to max_docs=None
-    max_docs = 10000  # Change to None for full corpus evaluation
+    # Use subset for testing (100k documents - large enough for meaningful results)
+    # Set to None for full corpus, or an integer for testing with a subset
+    max_docs = 100000  # 100k documents for testing (should have overlap with qrels)
 
     evaluate(
         model_path=args.model_path,
         variant=args.variant,
         max_docs=max_docs,
         index_path=args.index_path,
+        dense_index_path=args.dense_index_path,
         output_file=args.output_file
     )
 
