@@ -23,7 +23,11 @@ class DenseEngine:
         Args:
             model_name_or_path: Path to SentenceTransformer model or HuggingFace model ID.
         """
+        # Cache location and offline mode are controlled via environment variables set in shell script:
+        # HF_HOME, TRANSFORMERS_CACHE, SENTENCE_TRANSFORMERS_HOME, HF_HUB_OFFLINE, TRANSFORMERS_OFFLINE
+        # Don't use cache_folder parameter - let SentenceTransformer use environment variables automatically
         self.model = SentenceTransformer(model_name_or_path)
+        
         self.device = get_device()
         self.model = self.model.to(self.device)
         self.faiss_index: Optional[faiss.Index] = None
@@ -44,7 +48,8 @@ class DenseEngine:
             self.faiss_index = faiss.read_index(f"{index_path}.faiss")
             meta = np.load(f"{index_path}.meta.npz", allow_pickle=True)
             self.docno_map, self.text_map = meta['docno'], meta['text']
-            print(f"Index loaded ({len(self.docno_map)} documents)")
+            if self.docno_map is not None:
+                print(f"Index loaded ({len(self.docno_map)} documents)")
             return
         
         # Load documents
@@ -75,19 +80,22 @@ class DenseEngine:
         
         # Normalize embeddings for cosine similarity
         doc_embeddings = doc_embeddings.astype('float32')
-        faiss.normalize_L2(doc_embeddings)
+        faiss.normalize_L2(doc_embeddings)  # type: ignore[arg-type]
         
         # Add embeddings to index
-        self.faiss_index.add(doc_embeddings)
+        assert self.faiss_index is not None  # Type narrowing for type checker
+        self.faiss_index.add(doc_embeddings)  # type: ignore[call-arg]
         
-        # Store document metadata
-        self.docno_map = docs_df['docno'].values
-        self.text_map = docs_df['text'].values
+        # Store document metadata (convert to numpy arrays)
+        self.docno_map = np.asarray(docs_df['docno'].values)
+        self.text_map = np.asarray(docs_df['text'].values)
 
         # Save index if path provided
         if index_path:
             os.makedirs(os.path.dirname(index_path) if os.path.dirname(index_path) else '.', exist_ok=True)
+            assert self.faiss_index is not None
             faiss.write_index(self.faiss_index, f"{index_path}.faiss")
+            assert self.docno_map is not None and self.text_map is not None
             np.savez_compressed(f"{index_path}.meta", docno=self.docno_map, text=self.text_map)
             print(f"Index saved to {index_path}.faiss and {index_path}.meta.npz")
 
@@ -128,10 +136,11 @@ class DenseEngine:
 
         # Normalize query embeddings for cosine similarity
         query_embeddings = query_embeddings.astype('float32')
-        faiss.normalize_L2(query_embeddings)
+        faiss.normalize_L2(query_embeddings)  # type: ignore[arg-type]
         
         # Search in FAISS index
-        scores, indices = self.faiss_index.search(query_embeddings, top_k)
+        assert self.faiss_index is not None and self.docno_map is not None
+        scores, indices = self.faiss_index.search(query_embeddings, top_k)  # type: ignore[call-arg]
 
         # Format results
         results = []
@@ -154,6 +163,7 @@ if __name__ == "__main__":
     query = input("\nEnter your query: ")
     results = engine.search([query], top_k=5)
     print(f"\nTop 5 results for '{query}':\n")
+    assert engine.docno_map is not None and engine.text_map is not None
     for _, row in results.iterrows():
         doc_idx = np.where(engine.docno_map == row['docno'])[0][0]
         print(f"[{row['rank']}] (score: {row['score']:.4f}) {engine.text_map[doc_idx][:150]}...")

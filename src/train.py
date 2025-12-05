@@ -84,16 +84,10 @@ def train(
     query_positives = build_query_positives_mapping(qrels, corpus_dict)
     
     # Initialize model first (needed for loss functions)
-    # Use cache folder from environment (scratch space on cluster)
-    # Offline mode is controlled via environment variables (HF_HUB_OFFLINE, TRANSFORMERS_OFFLINE)
-    # Set these in your shell script or environment before running
-    cache_folder = os.environ.get('SENTENCE_TRANSFORMERS_HOME') or os.environ.get('HF_HOME')
-    
-    if cache_folder:
-        print(f"Loading model from cache: {cache_folder}")
-        model = SentenceTransformer(model_name, cache_folder=cache_folder)
-    else:
-        model = SentenceTransformer(model_name)
+    # Cache location and offline mode are controlled via environment variables set in shell script:
+    # HF_HOME, TRANSFORMERS_CACHE, SENTENCE_TRANSFORMERS_HOME, HF_HUB_OFFLINE, TRANSFORMERS_OFFLINE
+    # Don't use cache_folder parameter - let SentenceTransformer use environment variables automatically
+    model = SentenceTransformer(model_name)
     
     # Use device utility to support CUDA, MPS, or CPU
     device = get_and_print_device()
@@ -163,7 +157,8 @@ def train(
         per_device_train_batch_size=batch_size,
         logging_steps=logging_steps,
         save_strategy="epoch",
-        eval_strategy="epoch" if evaluator else "no",
+        # Don't set eval_strategy - InformationRetrievalEvaluator handles evaluation automatically
+        # The evaluator will be called by SentenceTransformerTrainer at the end of each epoch
     )
     
     trainer = SentenceTransformerTrainer(

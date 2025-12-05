@@ -28,7 +28,7 @@ SCRATCH_DIR="/scratch/${USER}/dense-retrieval"
 mkdir -p "${SCRATCH_DIR}"
 OUTPUT_DIR="${SCRATCH_DIR}/models"
 
-# --- Set Hugging Face to offline mode (use cache only) ---
+# --- Set Hugging Face cache location ---
 # Use scratch space for HuggingFace cache
 SCRATCH_CACHE="/scratch/${USER}/caches"
 mkdir -p "${SCRATCH_CACHE}/huggingface"
@@ -36,14 +36,21 @@ export HF_HOME="${SCRATCH_CACHE}/huggingface"
 export HF_DATASETS_CACHE="${SCRATCH_CACHE}/huggingface"
 export TRANSFORMERS_CACHE="${SCRATCH_CACHE}/huggingface"
 export SENTENCE_TRANSFORMERS_HOME="${SCRATCH_CACHE}/huggingface"
+
+# --- Set Hugging Face to offline mode (required for cluster without internet) ---
+# Models must be pre-downloaded to cache before running
+# Pre-download using: python -c "from huggingface_hub import snapshot_download; snapshot_download('sentence-transformers/all-MiniLM-L6-v2')"
+# See: https://huggingface.co/docs/transformers/installation#offline-mode
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
+echo "Offline mode enabled (models must be pre-downloaded to cache)"
+echo "Cache location: ${SCRATCH_CACHE}/huggingface"
 
-# Debug: show cache location
+# Debug: show cache location and contents
 echo "DEBUG: HF_HOME=${HF_HOME}"
-echo "DEBUG: Checking if model exists in cache..."
-ls -la "${SCRATCH_CACHE}/huggingface/" | head -10 || echo "Cache directory empty or not accessible"
+echo "DEBUG: Cache contents:"
+ls -la "${SCRATCH_CACHE}/huggingface/" 2>/dev/null | head -10 || echo "   Cache directory empty or not accessible"
 
 # --- Set PYTHONPATH to project root ---
 export PYTHONPATH=/home/aimanabdulwaha/dense-retrieval-mining-thesis:${PYTHONPATH}

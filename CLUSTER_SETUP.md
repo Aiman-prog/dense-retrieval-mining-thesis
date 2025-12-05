@@ -193,8 +193,8 @@ export TRANSFORMERS_CACHE=/scratch/${USER}/caches/huggingface
 export SENTENCE_TRANSFORMERS_HOME=/scratch/${USER}/caches/huggingface
 
 # Download the model (will be cached directly in scratch)
-# Both evaluation and training use the same model: sentence-transformers/all-MiniLM-L6-v2
-python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
+# Both evaluation and training use: distilbert-base-uncased
+python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('distilbert-base-uncased')"
 ```
 
 ### Step 5: Verify Everything is Ready
@@ -223,7 +223,7 @@ ls -la ~/.pyterrier/corpora/msmarco_passage
 # 5. Verify HuggingFace model is cached in scratch
 echo "Checking HuggingFace cache..."
 ls -la /scratch/${USER}/caches/huggingface/ | head -20
-# Should show model directory for sentence-transformers/all-MiniLM-L6-v2
+# Should show model directory for distilbert-base-uncased
 
 # 6. Test offline model loading (CRITICAL - must work before submitting job)
 export HF_HOME=/scratch/${USER}/caches/huggingface
@@ -233,8 +233,8 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 
-# Test loading the model in offline mode (used for both training and evaluation)
-python -c "from sentence_transformers import SentenceTransformer; import os; os.environ['HF_HUB_OFFLINE']='1'; m = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2'); print('✓ Model loads offline')"
+# Test loading the model in offline mode
+python -c "from sentence_transformers import SentenceTransformer; import os; os.environ['HF_HUB_OFFLINE']='1'; m = SentenceTransformer('distilbert-base-uncased'); print('✓ distilbert-base-uncased loads offline')"
 
 # Verify dataset actually exists in scratch
 ls -la /scratch/${USER}/caches/datasets/msmarco_passage/
@@ -245,7 +245,7 @@ python -c "import faiss; print(f'FAISS version: {faiss.__version__}'); print(f'G
 
     # 9. Verify HuggingFace model is in scratch
 # Note: sentence-transformers uses different directory structure (with underscores)
-ls -la /scratch/${USER}/caches/huggingface/sentence-transformers_all-MiniLM-L6-v2/
+ls -la /scratch/${USER}/caches/huggingface/distilbert-base-uncased/ 2>/dev/null || echo "distilbert-base-uncased not found"
 
     # 10. Verify Python script syntax
 export PYTHONPATH=$(pwd):${PYTHONPATH}

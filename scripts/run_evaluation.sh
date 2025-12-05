@@ -40,15 +40,22 @@ elif [ ! -L ~/.pyterrier/corpora/msmarco_passage ]; then
     ln -s ${SCRATCH_CACHE}/datasets/msmarco_passage ~/.pyterrier/corpora/msmarco_passage
 fi
 
-# --- Set Hugging Face to offline mode (use cache only) ---
+# --- Set Hugging Face cache location ---
 # Use scratch space for HuggingFace cache
 export HF_HOME=${SCRATCH_CACHE}/huggingface
 export HF_DATASETS_CACHE=${SCRATCH_CACHE}/huggingface
 export TRANSFORMERS_CACHE=${SCRATCH_CACHE}/huggingface
 export SENTENCE_TRANSFORMERS_HOME=${SCRATCH_CACHE}/huggingface
+
+# --- Set Hugging Face to offline mode (required for cluster without internet) ---
+# Models must be pre-downloaded to cache before running
+# Pre-download using: python -c "from huggingface_hub import snapshot_download; snapshot_download('sentence-transformers/all-MiniLM-L6-v2')"
+# See: https://huggingface.co/docs/transformers/installation#offline-mode
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
+echo "Offline mode enabled (models must be pre-downloaded to cache)"
+echo "Cache location: ${SCRATCH_CACHE}/huggingface"
 
 # --- Set scratch space for BM25 index and dense index ---
 SCRATCH_DIR="/scratch/${USER}/dense-retrieval"
@@ -69,7 +76,7 @@ echo "DEBUG: DENSE_INDEX_PATH=${DENSE_INDEX_PATH}"
 echo "DEBUG: SCRATCH_DIR=${SCRATCH_DIR}"
 
 python src/evaluate.py \
-  --model-path sentence-transformers/all-MiniLM-L6-v2 \
+  --model-path distilbert-base-uncased \
   --variant test-2019 \
   --index-path "${INDEX_PATH}" \
   --dense-index-path "${DENSE_INDEX_PATH}" \
