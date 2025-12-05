@@ -7,7 +7,7 @@ pyterrier[java]
 datasets
 pandas
 scikit-learn
-numpy<2.0
+numpy<2.0,>=1.21.0
 jupyter
-faiss-cpu
+faiss-gpu
 matplotlib

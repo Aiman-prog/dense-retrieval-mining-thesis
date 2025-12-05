@@ -1,13 +1,14 @@
 """Core Search Engine module for Dense Retrieval."""
 
-from typing import Any, Optional
+from typing import Any, Optional, Union
 import os
 import numpy as np
 import pandas as pd
 import faiss
+import pyterrier as pt
 from sentence_transformers import SentenceTransformer
 
-from src.utils import get_device
+from src.utils import get_device, init_pyterrier, load_dataset, load_corpus_sample
 
 
 class DenseEngine:
@@ -99,6 +100,111 @@ class DenseEngine:
             np.savez_compressed(f"{index_path}.meta", docno=self.docno_map, text=self.text_map)
             print(f"Index saved to {index_path}.faiss and {index_path}.meta.npz")
 
+    @staticmethod
+    def build_and_index_corpus(
+        model_path: str,
+        dataset: Optional[Union[pt.datasets.Dataset, pd.DataFrame]] = None,
+        max_docs: Optional[int] = None,
+        index_path: Optional[str] = None
+    ) -> 'DenseEngine':
+        """Build and index a corpus using a dense model.
+        
+        Args:
+            model_path: Path to SentenceTransformer model or HuggingFace model ID.
+            dataset: PyTerrier dataset or DataFrame. If None, loads MS MARCO dataset.
+            max_docs: Maximum number of documents to index. If None, indexes full corpus.
+            index_path: Optional path to save/load FAISS index.
+            
+        Returns:
+            DenseEngine instance with indexed corpus.
+        """
+        # Initialize PyTerrier if needed
+        init_pyterrier()
+        
+        # Load dataset if not provided
+        if dataset is None:
+            dataset = load_dataset()
+        
+        # Create engine
+        engine = DenseEngine(model_path)
+        
+        # Determine index path if not provided
+        if index_path is None:
+            scratch_dir = os.environ.get('SCRATCH_DIR')
+            if scratch_dir:
+                index_path = f"{scratch_dir}/dense_index"
+            else:
+                index_path = "./dense_index"
+        
+        # Index corpus (with or without sampling)
+        if max_docs is not None:
+            print(f"Indexing corpus sample ({max_docs} documents) for DenseEngine...")
+            if isinstance(dataset, pd.DataFrame):
+                corpus_df = dataset.head(max_docs)
+            else:
+                corpus_df = load_corpus_sample(dataset, max_docs=max_docs)
+            engine.index(corpus_df, index_path=index_path)
+        else:
+            print("Indexing full corpus (this may take a while) for DenseEngine...")
+            engine.index(dataset, index_path=index_path)
+        
+        return engine
+
+    @staticmethod
+    def build_bm25_index(
+        dataset: Optional[Union[pt.datasets.Dataset, pd.DataFrame]] = None,
+        max_docs: Optional[int] = None,
+        index_path: str = "./bm25_index",
+        top_k: int = 10
+    ) -> pt.Transformer:
+        """Build and return a BM25 retrieval pipeline.
+        
+        Args:
+            dataset: PyTerrier dataset or DataFrame. If None, loads MS MARCO dataset.
+            max_docs: Maximum number of documents to index. If None, indexes full corpus.
+            index_path: Path to store BM25 index.
+            top_k: Number of documents to retrieve.
+            
+        Returns:
+            PyTerrier transformer pipeline for BM25 retrieval.
+        """
+        # Initialize PyTerrier if needed
+        init_pyterrier()
+        
+        # Load dataset if not provided
+        if dataset is None:
+            dataset = load_dataset()
+        
+        # Ensure index directory exists
+        os.makedirs(os.path.dirname(index_path) if os.path.dirname(index_path) else '.', exist_ok=True)
+        
+        # Build index with or without sampling
+        if max_docs is not None:
+            print(f"Building BM25 index with {max_docs} documents...")
+            if isinstance(dataset, pd.DataFrame):
+                corpus_df = dataset.head(max_docs)
+            else:
+                corpus_df = load_corpus_sample(dataset, max_docs=max_docs)
+            corpus_iter = (row.to_dict() for _, row in corpus_df.iterrows())
+            indexer = pt.IterDictIndexer(index_path, overwrite=True, fields=['text'])  # type: ignore[arg-type]
+            indexref = indexer.index(corpus_iter)  # type: ignore[assignment]
+            assert indexref is not None  # Type narrowing for type checker
+            retriever = pt.terrier.Retriever(indexref, wmodel="BM25")  # type: ignore[assignment]
+            assert retriever is not None  # Type narrowing for type checker
+            return retriever % top_k
+        else:
+            print("Building BM25 index with full corpus...")
+            if isinstance(dataset, pd.DataFrame):
+                corpus_iter = (row.to_dict() for _, row in dataset.iterrows())
+            else:
+                corpus_iter = dataset.get_corpus_iter()
+            indexer = pt.IterDictIndexer(index_path, overwrite=True, fields=['text'])  # type: ignore[arg-type]
+            indexref = indexer.index(corpus_iter)  # type: ignore[assignment]
+            assert indexref is not None  # Type narrowing for type checker
+            retriever = pt.terrier.Retriever(indexref, wmodel="BM25")  # type: ignore[assignment]
+            assert retriever is not None  # Type narrowing for type checker
+            return retriever % top_k
+
     def search(self, queries: Any, top_k: int = 10) -> pd.DataFrame:
         """Perform dense retrieval for given queries.
         
@@ -158,7 +264,7 @@ class DenseEngine:
 if __name__ == "__main__":
     from src.utils import load_dataset, load_corpus_sample
     dataset = load_dataset()
-    engine = DenseEngine('sentence-transformers/all-MiniLM-L6-v2')
+    engine = DenseEngine('sentence-transformers/distilbert-base-uncased')
     engine.index(load_corpus_sample(dataset, max_docs=1000))
     query = input("\nEnter your query: ")
     results = engine.search([query], top_k=5)
