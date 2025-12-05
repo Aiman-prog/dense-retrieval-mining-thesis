@@ -31,10 +31,13 @@ def create_bm25_baseline(
     Returns:
         PyTerrier transformer pipeline for BM25 retrieval.
     """
-    indexer = pt.IterDictIndexer(index_path, overwrite=True, fields=['text'])
-    indexref = indexer.index(dataset.get_corpus_iter())
+    indexer = pt.IterDictIndexer(index_path, overwrite=True, fields=['text'])  # type: ignore[arg-type]
+    indexref = indexer.index(dataset.get_corpus_iter())  # type: ignore[assignment]
+    assert indexref is not None  # Type narrowing for type checker
     # Use pt.terrier.Retriever as shown in PyTerrier documentation
-    return pt.terrier.Retriever(indexref, wmodel="BM25") % top_k
+    retriever = pt.terrier.Retriever(indexref, wmodel="BM25")  # type: ignore[assignment]
+    assert retriever is not None  # Type narrowing for type checker
+    return retriever % top_k
 
 
 def evaluate(
@@ -107,9 +110,12 @@ def evaluate(
         from src.utils import load_corpus_sample
         corpus_df = load_corpus_sample(dataset, max_docs=max_docs)
         corpus_iter = (row.to_dict() for _, row in corpus_df.iterrows())
-        indexer = pt.IterDictIndexer(index_path, overwrite=True, fields=['text'])
-        indexref = indexer.index(corpus_iter)
-        bm25_pipeline = pt.terrier.Retriever(indexref, wmodel="BM25") % 10
+        indexer = pt.IterDictIndexer(index_path, overwrite=True, fields=['text'])  # type: ignore[arg-type]
+        indexref = indexer.index(corpus_iter)  # type: ignore[assignment]
+        assert indexref is not None  # Type narrowing for type checker
+        retriever = pt.terrier.Retriever(indexref, wmodel="BM25")  # type: ignore[assignment]
+        assert retriever is not None  # Type narrowing for type checker
+        bm25_pipeline = retriever % 10
     else:
         bm25_pipeline = create_bm25_baseline(dataset, index_path=index_path, top_k=10)
 
@@ -125,11 +131,18 @@ def evaluate(
     )
 
     # Extract results
+    dense_row = experiment[experiment['name'] == 'Dense']
+    bm25_row = experiment[experiment['name'] == 'BM25']
+    # Access pandas Series values (type checker may not recognize DataFrame column access)
+    dense_ndcg_series: pd.Series = dense_row['ndcg_cut_10']  # type: ignore[assignment]
+    dense_mrr_series: pd.Series = dense_row['recip_rank']  # type: ignore[assignment]
+    bm25_ndcg_series: pd.Series = bm25_row['ndcg_cut_10']  # type: ignore[assignment]
+    bm25_mrr_series: pd.Series = bm25_row['recip_rank']  # type: ignore[assignment]
     results = {
-        'dense_ndcg': experiment[experiment['name'] == 'Dense']['ndcg_cut_10'].values[0],
-        'dense_mrr': experiment[experiment['name'] == 'Dense']['recip_rank'].values[0],
-        'bm25_ndcg': experiment[experiment['name'] == 'BM25']['ndcg_cut_10'].values[0],
-        'bm25_mrr': experiment[experiment['name'] == 'BM25']['recip_rank'].values[0],
+        'dense_ndcg': float(dense_ndcg_series.iloc[0]),
+        'dense_mrr': float(dense_mrr_series.iloc[0]),
+        'bm25_ndcg': float(bm25_ndcg_series.iloc[0]),
+        'bm25_mrr': float(bm25_mrr_series.iloc[0]),
         'experiment_df': experiment
     }
 

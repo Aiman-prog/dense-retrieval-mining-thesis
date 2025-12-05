@@ -1,7 +1,7 @@
 """Negative mining strategies for training dual encoders."""
 
 import random
-from typing import Dict, List
+from typing import Dict, List, Optional
 import pandas as pd
 from sentence_transformers import InputExample
 
@@ -29,11 +29,11 @@ def mine_in_batch_negatives(
     for _, topic_row in topics.iterrows():
         if len(train_examples) >= num_examples:
             break
-        qid = topic_row['qid']
+        qid = str(topic_row['qid'])  # Convert to string for type checker
         if qid not in query_positives or len(query_positives[qid]) == 0:
             continue
         
-        query = topic_row['query']
+        query = str(topic_row['query'])  # Convert to string for type checker
         # Use first positive passage for this query
         positive = query_positives[qid][0]
         train_examples.append(InputExample(texts=[query, positive]))
@@ -68,11 +68,11 @@ def mine_random_negatives(
     for _, topic_row in topics.iterrows():
         if len(train_examples) >= num_examples:
             break
-        qid = topic_row['qid']
+        qid = str(topic_row['qid'])  # Convert to string for type checker
         if qid not in query_positives or len(query_positives[qid]) == 0:
             continue
         
-        query = topic_row['query']
+        query = str(topic_row['query'])  # Convert to string for type checker
         positive = query_positives[qid][0]
         # Sample random negative (ensure it's different from positive)
         negative = random.choice(all_passages)
@@ -88,7 +88,7 @@ def mine_negatives(
     strategy: str,
     topics: pd.DataFrame,
     query_positives: Dict[str, List[str]],
-    corpus_dict: Dict[str, str] = None,
+    corpus_dict: Optional[Dict[str, str]] = None,
     num_examples: int = 1000
 ) -> List[InputExample]:
     """Mine training examples using the specified negative sampling strategy.

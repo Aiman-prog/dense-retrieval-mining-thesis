@@ -130,16 +130,17 @@ def train(
     # InputExamples need to be converted to dict format
     if strategy == 'in-batch':
         # For pairs: (text1, text2)
+        # InputExample.texts is always a list, but type checker may not know this
         train_data = {
-            'text1': [ex.texts[0] for ex in train_examples],
-            'text2': [ex.texts[1] for ex in train_examples]
+            'text1': [ex.texts[0] for ex in train_examples if ex.texts and len(ex.texts) > 0],  # type: ignore[index]
+            'text2': [ex.texts[1] for ex in train_examples if ex.texts and len(ex.texts) > 1]  # type: ignore[index]
         }
     else:  # random strategy
         # For triplets: (anchor, positive, negative)
         train_data = {
-            'anchor': [ex.texts[0] for ex in train_examples],
-            'positive': [ex.texts[1] for ex in train_examples],
-            'negative': [ex.texts[2] for ex in train_examples]
+            'anchor': [ex.texts[0] for ex in train_examples if ex.texts and len(ex.texts) > 0],  # type: ignore[index]
+            'positive': [ex.texts[1] for ex in train_examples if ex.texts and len(ex.texts) > 1],  # type: ignore[index]
+            'negative': [ex.texts[2] for ex in train_examples if ex.texts and len(ex.texts) > 2]  # type: ignore[index]
         }
     
     train_dataset = Dataset.from_dict(train_data)
